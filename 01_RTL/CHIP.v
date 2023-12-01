@@ -78,6 +78,7 @@ module CHIP #(                                                                  
     reg [63:0] id_imm_r, id_imm_w;
     reg id_branch_r, id_branch_w;
     reg id_jump_r, id_jump_w;
+    reg id_jr_r, id_jr_w;
     reg id_memread_r, id_memread_w;
     reg id_memtoreg_r, id_memtoreg_w;
     reg [1:0] id_alu_op_r, id_alu_op_w;
@@ -101,6 +102,7 @@ module CHIP #(                                                                  
                 id_regwrite_w = 0;
                 id_imm_w      = 0;
                 id_jump_w     = 0;
+                id_jr_w       = 0;
             end
             else if(i_IMEM_data[6:0] == 7'b0010111)begin //auipc (U type) //FINISH
                 id_branch_w   = 0;
@@ -114,9 +116,10 @@ module CHIP #(                                                                  
                 id_imm_w[31:12] = i_IMEM_data[31:12];
                 id_imm_w[11:0]  = 0;      
                 id_jump_w       = 0;
+                id_jr_w         = 0;
             end
             else if(i_IMEM_data[6:0] == 7'b1101111)begin //jal (UJ type) //FINISH
-                id_branch_w   = 1;
+                id_branch_w   = 0;
                 id_memread_w  = 0;
                 id_memtoreg_w = 0;
                 id_alu_op_w   = 2'b01;
@@ -130,9 +133,10 @@ module CHIP #(                                                                  
                 id_imm_w[10:1]  = i_IMEM_data[30:21];
                 id_imm_w[0]     = 0;
                 id_jump_w       = 1;
+                id_jr_w         = 0;
             end
             else if(i_IMEM_data[6:0] == 7'b1100111)begin //jalr (I type) //FINISH
-                id_branch_w     = 1;
+                id_branch_w     = 0;
                 id_memread_w    = 0;
                 id_memtoreg_w   = 0;
                 id_alu_op_w     = 2'b01;
@@ -141,6 +145,7 @@ module CHIP #(                                                                  
                 id_regwrite_w   = 1;
                 id_imm_w        = 0;
                 id_jump_w       = 1;
+                id_jr_w         = 1;
             end
             else if(i_IMEM_data[6:0] == 7'b0000011)begin //lw  (I type) //FINISH
                 id_branch_w   = 0;
@@ -153,6 +158,7 @@ module CHIP #(                                                                  
                 id_imm_w[63:12] = 0;
                 id_imm_w[11:0]  = i_IMEM_data[31:20];
                 id_jump_w       = 0;
+                id_jr_w         = 0;
             end
             else if(i_IMEM_data[6:0] == 7'b0100011)begin //sw  (S type) //FINISH
                 id_branch_w   = 0;
@@ -165,7 +171,8 @@ module CHIP #(                                                                  
                 id_imm_w[63:12] = 0;
                 id_imm_w[11:5]  = i_IMEM_data[31:25];
                 id_imm_w[4:0]   = i_IMEM_data[11:7]; 
-                id_jump_w       = 0;           
+                id_jump_w       = 0;  
+                id_jr_w         = 0;         
             end
             else if(i_IMEM_data[6:0] == 7'b0010011)begin //addi (I type) //FINISH
                 id_branch_w   = 0;
@@ -178,6 +185,7 @@ module CHIP #(                                                                  
                 id_imm_w[63:12] = 0;
                 id_imm_w[11:0]  = i_IMEM_data[31:20];
                 id_jump_w       = 0;
+                id_jr_w         = 0;
             end
             else if(i_IMEM_data[6:0] == 7'b0110011)begin //add  (R type) //FINISH
                 id_branch_w   = 0;
@@ -189,6 +197,7 @@ module CHIP #(                                                                  
                 id_regwrite_w = 1;
                 id_imm_w      = 0;
                 id_jump_w     = 0;
+                id_jr_w       = 0;
             end
             else if(i_IMEM_data[6:0] == 7'b1110011)begin //ecall (I type)  //FINISH
                 id_branch_w   = 0;
@@ -200,6 +209,7 @@ module CHIP #(                                                                  
                 id_regwrite_w = 0;
                 id_imm_w      = 0;
                 id_jump_w     = 0;
+                id_jr_w       = 0;
             end
             else begin  //FINISH
                 id_branch_w   = 0;
@@ -211,6 +221,7 @@ module CHIP #(                                                                  
                 id_regwrite_w = 0;
                 id_imm_w      = 0;
                 id_jump_w     = 0;
+                id_jr_w       = 0;
             end
         end
         else begin
@@ -227,13 +238,12 @@ module CHIP #(                                                                  
             id_regwrite_w = id_regwrite_r;
             id_imm_w      = id_imm_r;  
             id_jump_w     = id_jump_r;
+            id_jr_w       = id_jr_r;
         end
     end
 
 //TODO: EX
     reg [31:0] rs1_output, rs2_output;
-    // reg [31:0] ex_rs1_data_w, ex_rs1_data_r;
-    // reg [31:0] ex_rs2_data_w, ex_rs2_data_r;
     reg [31:0] ex_pc_cal_w, ex_pc_cal_r;
     reg [31:0] ex_result_w, ex_result_r;
     reg ex_memread_r, ex_memread_w;
@@ -242,6 +252,10 @@ module CHIP #(                                                                  
     reg ex_regwrite_r, ex_regwrite_w;
     reg ex_rd_r, ex_rd_w;
     reg ex_branch_r, ex_branch_w;
+    reg ex_jump_r, ex_jump_w;
+    reg ex_jr_r, ex_jr_w;
+    reg [4:0] ex_reg_rs1_r, ex_reg_rs1_w;
+    reg [31:0] ex_imm_r, ex_imm_w;
     always @(*) begin
         if(i_DMEM_stall == 0) begin
             ex_pc_cal_w   = pc + id_imm_r;
@@ -251,24 +265,49 @@ module CHIP #(                                                                  
             ex_regwrite_w = id_regwrite_r; 
             ex_rd_w       = id_rd_r;
             ex_branch_w   = id_branch_r;
+            ex_jump_w     = id_jump_r;
+            ex_jr_w       = id_jr_r;
+            ex_reg_rs1_w  = rs1_output;
+            ex_imm_w      = id_imm_r[31:0];
             if(id_alu_src == 0) begin // alu source is reg
                 if(id_alu_op_r == 2'b00) begin
                     ex_result_w = rs1_output + rs2_output;
                 end
                 else if(id_alu_op_r == 2'b01) begin //branch
-                    if(id_func3_r == 3'b000) begin
-                        
+                    if(id_func3_r == 3'b000) begin  //BEQ
+                        if(rs1_output == rs2_output) begin
+                            ex_result_w = 0;
+                        end
+                        else begin
+                            ex_result_w = 1;
+                        end
                     end
-                    else if(id_func3_r == 3'b001) begin
-                        
+                    else if(id_func3_r == 3'b001) begin //BNE
+                        if(rs1_output == rs2_output) begin
+                            ex_result_w = 1;
+                        end
+                        else begin
+                            ex_result_w = 0;
+                        end
                     end
-                    else if(id_func3_r == 3'b100) begin
+                    else if(id_func3_r == 3'b100) begin //BLT
+                        if($signed(rs1_output) < $signed(rs2_output)) begin
+                            ex_result_w = 0;
+                        end
+                        else begin
+                            ex_result_w = 1;
+                        end
                     end
-                    else if(id_func3_r == 3'b101) begin
-                        
+                    else if(id_func3_r == 3'b101) begin //BGE
+                        if($signed(rs1_output) >= $signed(rs2_output)) begin
+                            ex_result_w = 0;
+                        end
+                        else begin
+                            ex_result_w = 1;
+                        end
                     end
                     else begin
-                        ex_result_w = rs1_output - rs2_output;
+                        ex_result_w = 1;
                     end
                 end
                 else if(id_alu_op_r == 2'b10) begin
@@ -335,6 +374,10 @@ module CHIP #(                                                                  
             ex_rd_w       = ex_rd_r;
             ex_result_w   = ex_result_r;
             ex_branch_w   = ex_branch_r;
+            ex_jump_w     = ex_jump_r;
+            ex_jr_w       = ex_jr_r;
+            ex_reg_rs1_w  = ex_reg_rs1_r;
+            ex_imm_w      = ex_imm_r;
         end
     end
 //TODO: MEM
@@ -387,8 +430,16 @@ module CHIP #(                                                                  
 
 //TODO: Branch
     always @(*) begin
-        if(ex_branch_r && mem_result_r == 0) begin
+        if(ex_branch_r && ex_result_r == 0) begin
             next_PC = ex_pc_cal_r;
+        end
+        else if(ex_jump_r) begin
+            if(ex_jr_r) begin
+                next_PC = ex_reg_rs1_r + ex_imm_r;
+            end
+            else begin
+                next_PC = PC + ex_imm_r;
+            end
         end
         else begin
             next_PC = PC + 4;
@@ -416,6 +467,7 @@ module CHIP #(                                                                  
             id_func3_r     <= id_func3_w;
             id_func7_r     <= id_func7_w;
             id_jump_r      <= id_jump_w;
+            id_jr_r        <= id_jr_w;
             ex_pc_cal_r    <= ex_pc_cal_w;
             ex_memread_r   <= ex_memread_w;
             ex_memtoreg_r  <= ex_memtoreg_w;
@@ -424,6 +476,8 @@ module CHIP #(                                                                  
             ex_rd_r        <= ex_rd_w;
             ex_result_r    <= ex_result_w;
             ex_branch_r    <= ex_branch_w;
+            ex_reg_rs1_r   <= ex_reg_rs1_w;
+            ex_imm_r       <= ex_imm_w;
             mem_rd_r       <= mem_rd_w;
             mem_result_r   <= mem_result_w;
             mem_memtoreg_r <= mem_memtoreg_w;
