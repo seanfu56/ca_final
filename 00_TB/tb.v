@@ -2,7 +2,7 @@
 `timescale 1 ns/10 ps
 
 `define CYCLE 10          // Do not change this value!!!
-`define END_CYCLE 5000 // You can modify your maximum cycles
+`define END_CYCLE 10000 // You can modify your maximum cycles
 
 `include "../00_TB/memory.v"
 `define SIZE_DATA 1024  // You can change the size
@@ -142,8 +142,9 @@ module Final_tb;
             .o_mem_wdata    (DMEM_wdata),
             .i_mem_rdata    (DMEM_rdata),
             .i_mem_stall    (mem_stall),
-            .o_cache_available (cache_available)
-            
+            .o_cache_available (cache_available),
+        // others
+            .i_offset (mem_data_offset)
     );
 
     // Initialize the data memory
@@ -190,7 +191,6 @@ module Final_tb;
         end
         $readmemh (`MEM_DATA, DMEM.mem); // initialize data in mem_D
         $readmemh (`MEM_GOLDEN, DMEM_golden); // initialize data in mem_D
-        
     end
 
     initial begin
@@ -225,9 +225,6 @@ module Final_tb;
                 if (error_num == 0)
                     $display("Error!");
                 error_num = error_num + 1;
-                //TODO
-                $display("  Offset = 0x%8d", mem_data_offset);
-                //FINISH
                 $display("  Addr = 0x%8d  Golden: 0x%8h  Your ans: 0x%8h", (mem_data_offset + i*4), DMEM_golden[i], mem_data);
             end
         end
