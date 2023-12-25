@@ -192,7 +192,8 @@ module CHIP #(                                                                  
             id_imm_w      = id_imm_r;  
             id_jump_w     = id_jump_r;
             id_jr_w       = id_jr_r;
-            id_end_w      = id_end_r;            
+            id_end_w      = id_end_r;  
+            id_memtoreg_w = id_memread_r;          
         end
         else if(id_jump_r || ex_jump_r || mem_jump_r) begin
             id_rs1_w      = 0;
@@ -209,7 +210,8 @@ module CHIP #(                                                                  
             id_imm_w      = 0;  
             id_jump_w     = 0;
             id_jr_w       = 0;
-            id_end_w      = 0;  
+            id_end_w      = 0;
+            id_memtoreg_w = 0;  
         end
         else if(ex_result_r == 0 & ex_branch_r == 1) begin
             id_rs1_w      = 0;
@@ -227,6 +229,7 @@ module CHIP #(                                                                  
             id_jump_w     = 0;
             id_jr_w       = 0;
             id_end_w      = 0;  
+            id_memtoreg_w = 0;
         end
         else begin
             id_rs1_w   = i_IMEM_data[19:15];
@@ -459,7 +462,8 @@ module CHIP #(                                                                  
             ex_imm_w      = 0;
             ex_result_w   = 0;   
             state_w       = state_r; 
-            alu_valid_w   = 0;         
+            alu_valid_w   = 0;   
+            ex_rs1_w      = 0;      
         end
         else if((id_rs1_r == ex_rd_r && id_rs1_r != 0) || (id_rs2_r == ex_rd_r && id_rs2_r != 0) || (id_rs1_r == mem_rd_r && id_rs1_r != 0) || (id_rs2_r == mem_rd_r && id_rs2_r != 0)) begin
             ex_pc_cal_w   = 0;
@@ -477,7 +481,8 @@ module CHIP #(                                                                  
             ex_imm_w      = 0;
             ex_result_w   = 0;   
             state_w       = state_r;
-            alu_valid_w   = 0;        
+            alu_valid_w   = 0;
+            ex_rs1_w      = 0;        
         end
         else if(i_DMEM_stall == 0 && ex_end_r == 0) begin
             ex_pc_cal_w   = PC + id_imm_r - 4;
@@ -1266,11 +1271,23 @@ module Cache#(
             output [BIT_W*4-1:0]  o_mem_wdata,
             input [BIT_W*4-1:0] i_mem_rdata,
             input i_mem_stall,
-            output o_cache_available
+            output o_cache_available,
+        // others
+        input  [ADDR_W-1: 0] i_offset
     );
 
-    assign o_cache_available = 0; // change this value to 1 if the cache is implemented
+    localparam S_IDLE    = 3'd0;
+    localparam S_R_HIT   = 3'd1;
+    localparam S_R_MISS  = 3'd2;
+    localparam S_R_FETCH = 3'd3;
+    localparam S_W_HIT   = 3'd4;
+    localparam S_W_MISS  = 3'd5;
+    localparam S_W_FETCH = 3'd6;
+    localparam S_W_WB    = 3'd7;
 
+    assign o_cache_available = 1; // change this value to 1 if the cache is implemented
+
+    
     //------------------------------------------//
     //          default connection              //
     assign o_mem_cen = i_proc_cen;              //
@@ -1280,10 +1297,12 @@ module Cache#(
     assign o_proc_rdata = i_mem_rdata[0+:BIT_W];//
     assign o_proc_stall = i_mem_stall;          //
     //------------------------------------------//
+    
 
     // Todo: BONUS
-    localparam SRAM_BIT = 28+2+32; //MSB: valid, dirty,  [31:0] : data 
-    localparam SRAM_SIZE = 16;
+    integer i;
+    localparam SRAM_BIT = 26+1+128; //MSB: valid,  [31:0] : data 
+    localparam SRAM_SIZE = 4;
     reg [SRAM_BIT-1 : 0] sram_w [SRAM_SIZE-1 : 0];
     reg [SRAM_BIT-1 : 0] sram_r [SRAM_SIZE-1 : 0];
     reg [BIT_W-1:0] out_data_r, out_data_w;
@@ -1293,89 +1312,355 @@ module Cache#(
     reg out_mem_cen_r, out_mem_cen_w;
     reg out_mem_wen_r, out_mem_wen_w;
 
-    reg state_r, state_w;
+    reg [2:0] state_r, state_w;
+
+    reg [31:0] out_data;
+
+    reg [127:0] out_m_data;
+
+    reg [127:0] data;
+
+    wire [31:0] addr_offset;
 
     assign o_mem_cen    = out_mem_cen_r;
     assign o_mem_wen    = out_mem_wen_r;
-    assign o_mem_addr   = out_mem_addr_r;
-    assign o_mem_wdata  = out_mem_wdata_r;
-    assign o_proc_rdata = out_data_r;
-    assign o_proc_stall = out_stall_r;
+    
+    // assign o_mem_wdata  = out_mem_wdata_r;
+    assign o_mem_wdata  = out_m_data;
+    assign o_proc_rdata = out_data;
+    // assign o_proc_stall = out_stall_r;
+    assign o_proc_stall = (state_r != 3'd0);
+    assign addr_offset  = i_proc_addr - i_offset;
+    assign o_mem_addr   = {addr_offset[31:4], 4'b0000} + i_offset;
 
-    localparam S_IDLE = 2'b00;
-    localparam S_HIT  = 2'b10;
-    localparam S_WAIT = 2'b11;
+
+    always@(*) begin
+        if(S_R_HIT && i_proc_cen) begin
+            if(addr_offset[3:2] == 0) begin
+                out_data = sram_r[addr_offset[5:4]][31:0];
+            end
+            else if(addr_offset[3:2] == 1) begin
+                out_data = sram_r[addr_offset[5:4]][63:32];
+            end
+            else if(addr_offset[3:2] == 2) begin
+                out_data = sram_r[addr_offset[5:4]][95:64];
+            end
+            else begin
+                out_data = sram_r[addr_offset[5:4]][127:96];
+            end
+        end
+        else begin
+            out_data = 0;
+        end
+    end
+
+    always@(*) begin
+        if(addr_offset[3:2] == 0) begin
+            data[127 : 96] = sram_r[addr_offset[5:4]][127 : 96];
+            data[ 95 : 64] = sram_r[addr_offset[5:4]][ 95 : 64];
+            data[ 63 : 32] = sram_r[addr_offset[5:4]][ 63 : 32];
+            data[ 31 :  0] = i_proc_wdata; 
+
+        end
+        else if(addr_offset[3:2] == 1) begin
+            data[127 : 96] = sram_r[addr_offset[5:4]][127 : 96];
+            data[ 95 : 64] = sram_r[addr_offset[5:4]][ 95 : 64];
+            data[ 63 : 32] = i_proc_wdata;
+            data[ 31 :  0] = sram_r[addr_offset[5:4]][ 31 :  0]; 
+
+        end
+        else if(addr_offset[3:2] == 2) begin
+            data[127 : 96] = sram_r[addr_offset[5:4]][127 : 96];
+            data[ 95 : 64] = i_proc_wdata;
+            data[ 63 : 32] = sram_r[addr_offset[5:4]][ 63 : 32];
+            data[ 31 :  0] = sram_r[addr_offset[5:4]][ 31 :  0]; 
+
+        end
+        else begin
+            data[127 : 96] = i_proc_wdata;
+            data[ 95 : 64] = sram_r[addr_offset[5:4]][ 95 : 64];
+            data[ 63 : 32] = sram_r[addr_offset[5:4]][ 63 : 32];
+            data[ 31 :  0] = sram_r[addr_offset[5:4]][ 31 :  0]; 
+        end
+    end
+
+    always@(*) begin
+        if(i_proc_wen && i_proc_cen) begin
+            if(addr_offset[3:2] == 0) begin
+                out_m_data[127:32] = sram_r[addr_offset[5:4]][127:32];
+                out_m_data[31:0]   = i_proc_wdata;
+            end
+            else if(addr_offset[3:2] == 1) begin
+                out_m_data[127:64] = sram_r[addr_offset[5:4]][127:64];
+                out_m_data[63:32]  = i_proc_wdata;
+                out_m_data[31:0]   = sram_r[addr_offset[5:4]][31:0];
+            end
+            else if(addr_offset[3:2] == 2) begin
+                out_m_data[127:96] = sram_r[addr_offset[5:4]][127:96];
+                out_m_data[95:64]  = i_proc_wdata;
+                out_m_data[63:0]   = sram_r[addr_offset[5:4]][63:0]; 
+            end
+            else begin
+                out_m_data[127:96] = i_proc_wdata;
+                out_m_data[95:0]   = sram_r[addr_offset[5:4]][95:0];
+            end
+        end
+        else begin
+            out_m_data = 0;
+        end
+    end
 
     always@(*) begin
         case(state_r) 
             S_IDLE: begin
-                
+                out_mem_cen_w = 0;
+                out_mem_wen_w = 0;
+                for (i=0; i<4; i=i+1) begin
+                    sram_w[i] = sram_r[i];
+                end
+                if(i_proc_wen && i_proc_cen) begin
+                    out_stall_w = 1;
+                    if(sram_r[addr_offset[5:4]][SRAM_BIT-1] == 1) begin
+                        if(sram_r[addr_offset[5:4]][SRAM_BIT-2 : 128] == addr_offset[31:6]) begin
+                            state_w = S_W_HIT;                     
+                        end
+                        else begin
+                            state_w = S_W_MISS;
+                        end
+                    end
+                    else begin
+                        state_w = S_W_MISS;
+                    end
+                end
+                else if(i_proc_cen && !i_proc_wen) begin
+                    out_stall_w = 1;
+                    if(sram_r[addr_offset[5:4]][SRAM_BIT-1] == 1) begin
+                        if(sram_r[addr_offset[5:4]][SRAM_BIT-2 : 128] == addr_offset[31:6]) begin
+                            state_w = S_R_HIT;                     
+                        end
+                        else begin
+                            state_w = S_R_MISS;
+                        end
+                    end    
+                    else begin
+                        state_w = S_R_MISS;
+                    end                
+                end
+                else begin
+                    out_stall_w = 0;
+                    state_w = S_IDLE;
+                end
+
             end
-            S_HIT: begin
+            S_R_HIT: begin
+                out_mem_cen_w = 0;
+                out_mem_wen_w = 0;
+                out_stall_w = 1;
+                state_w = S_IDLE;
+                for (i=0; i<4; i=i+1) begin
+                    sram_w[i] = sram_r[i];
+                end
             end
-            S_WAIT: begin
+            S_R_MISS: begin
+                state_w = S_R_FETCH;
+                out_mem_addr_w  = i_proc_addr;
+                out_mem_cen_w   = 1;
+                out_mem_wen_w   = 0;
+                out_stall_w     = 1;
+                for (i=0; i<4; i=i+1) begin
+                    sram_w[i] = sram_r[i];
+                end
+            end
+            S_R_FETCH: begin
+                out_mem_addr_w = out_mem_addr_r;
+                out_mem_cen_w = 1;
+                out_mem_wen_w = 0;
+                if(i_mem_stall) begin
+                    out_stall_w = 1;
+                    state_w = S_R_FETCH;
+                    for (i=0; i<4; i=i+1) begin
+                        sram_w[i] = sram_r[i];
+                    end
+                end
+                else begin
+                    case(addr_offset[5:4])
+                        2'd0: begin
+                            sram_w[0] = {1, addr_offset[31:16], i_mem_rdata};
+                            sram_w[1] = sram_r[1];
+                            sram_w[2] = sram_r[2];
+                            sram_w[3] = sram_r[3];
+                        end
+                        2'd1: begin
+                            sram_w[0] = sram_r[0];
+                            sram_w[1] = {1, addr_offset[31:16], i_mem_rdata};
+                            sram_w[2] = sram_r[2];
+                            sram_w[3] = sram_r[3];
+                        end
+                        2'd2: begin
+                            sram_w[0] = sram_r[0];
+                            sram_w[1] = sram_r[1];
+                            sram_w[2] = {1, addr_offset[31:16], i_mem_rdata};
+                            sram_w[3] = sram_r[3];
+                        end
+                        2'd3: begin
+                            sram_w[0] = sram_r[0];
+                            sram_w[1] = sram_r[1];
+                            sram_w[2] = sram_r[2];
+                            sram_w[3] = {1, addr_offset[31:16], i_mem_rdata};
+                        end
+                    endcase
+                    out_stall_w = 0;
+                    state_w = S_R_HIT;
+                end
+            end
+            S_W_HIT: begin
+                state_w = S_W_WB;
+                out_mem_addr_w = i_proc_addr;
+                out_mem_cen_w  = 1;
+                out_mem_wen_w  = 1;
+                out_stall_w    = 1;
+                for (i=0; i<4; i=i+1) begin
+                    sram_w[i] = sram_r[i];
+                end
+
+            end
+            S_W_MISS: begin
+                state_w = S_W_FETCH;
+                out_mem_addr_w = i_proc_addr;
+                out_mem_cen_w  = 1;
+                out_mem_wen_w  = 1;
+                out_stall_w    = 1;
+                for (i=0; i<4; i=i+1) begin
+                    sram_w[i] = sram_r[i];
+                end
+            end
+            S_W_FETCH: begin
+                out_mem_addr_w = out_mem_addr_r;
+                out_mem_cen_w = 1;
+                out_mem_wen_w = 0;
+                if(i_mem_stall) begin
+                    out_stall_w = 1;
+                    state_w = S_W_FETCH;
+                    for (i=0; i<4; i=i+1) begin
+                        sram_w[i] = sram_r[i];
+                    end
+                end
+                else begin
+                    out_stall_w = 0;
+                    state_w = S_W_WB;
+                    case(addr_offset[5:4])
+                        2'd0: begin
+                            sram_w[0] = {1, addr_offset[31:16], i_mem_rdata};
+                            sram_w[1] = sram_r[1];
+                            sram_w[2] = sram_r[2];
+                            sram_w[3] = sram_r[3];
+                        end
+                        2'd1: begin
+                            sram_w[0] = sram_r[0];
+                            sram_w[1] = {1, addr_offset[31:16], i_mem_rdata};
+                            sram_w[2] = sram_r[2];
+                            sram_w[3] = sram_r[3];
+                        end
+                        2'd2: begin
+                            sram_w[0] = sram_r[0];
+                            sram_w[1] = sram_r[1];
+                            sram_w[2] = {1, addr_offset[31:16], i_mem_rdata};
+                            sram_w[3] = sram_r[3];
+                        end
+                        2'd3: begin
+                            sram_w[0] = sram_r[0];
+                            sram_w[1] = sram_r[1];
+                            sram_w[2] = sram_r[2];
+                            sram_w[3] = {1, addr_offset[31:16], i_mem_rdata};
+                        end
+                    endcase
+                end                
+            end
+            S_W_WB: begin
+                out_mem_addr_w = out_mem_addr_r;
+                out_mem_cen_w = 1;
+                out_mem_wen_w = 1;
+                if(i_mem_stall) begin
+                    state_w = S_W_WB;
+                    out_stall_w = 1;
+                    case(addr_offset[5:4])
+                        2'd0: begin
+                            sram_w[0] = {1, addr_offset[31:16], data};
+                            sram_w[1] = sram_r[1];
+                            sram_w[2] = sram_r[2];
+                            sram_w[3] = sram_r[3];
+                        end
+                        2'd1: begin
+                            sram_w[0] = sram_r[0];
+                            sram_w[1] = {1, addr_offset[31:16], data};
+                            sram_w[2] = sram_r[2];
+                            sram_w[3] = sram_r[3];
+                        end
+                        2'd2: begin
+                            sram_w[0] = sram_r[0];
+                            sram_w[1] = sram_r[1];
+                            sram_w[2] = {1, addr_offset[31:16], data};
+                            sram_w[3] = sram_r[3];
+                        end
+                        2'd3: begin
+                            sram_w[0] = sram_r[0];
+                            sram_w[1] = sram_r[1];
+                            sram_w[2] = sram_r[2];
+                            sram_w[3] = {1, addr_offset[31:16], data};
+                        end
+                    endcase
+
+                end
+                else begin
+                    out_stall_w = 0;
+                    state_w = S_IDLE;
+                    for (i=0; i<4; i=i+1) begin
+                        sram_w[i] = sram_r[i];
+                    end
+                end
+            end
+            default: begin
+                state_w = S_IDLE;
+                out_mem_wen_w = 0;
+                out_mem_cen_w = 0;
+                for (i=0; i<4; i=i+1) begin
+                    sram_w[i] = sram_r[i];
+                end
             end
         endcase
     end
 
-    always@(*) begin
-        if(i_proc_cen && !i_proc_wen) begin
-            if(sram_r[i_proc_addr[4:0]][SRAM_BIT-1] == 1) begin
-                if(sram_r[i_proc_addr[4:0]][SRAM_BIT-2 : 32] == i_proc_addr[31:5]) begin
-                    out_data_w     = sram_r[i_proc_addr[4:0]][31:0];
-                    out_stall_w    = 0;
-                    out_mem_addr_w = 0;
-                    out_mem_cen_w  = 0;
-                    out_mem_wen_w  = 0;
-                end
-                else if(out_stall_r == 0) begin
-                    out_data_w     = i_mem_rdata;
-                    out_stall_w    = 1;
-                    out_mem_addr_w = i_proc_wdata;
-                    out_mem_cen_w  = i_proc_cen;
-                    out_mem_wen_w  = i_proc_wen;
-                end
-                else if(i_mem_stall == 1) begin
-                    out_data_w     = i_mem_rdata;
-                    out_stall_w    = 1;
-                    out_mem_addr_w = out_mem_addr_r;
-                    out_mem_cen_w  = out_mem_cen_r;
-                    out_mem_wen_w  = out_mem_wen_r;
-                end
-                else begin
-                    out_data_w     = out_data_r;
-                    out_stall_w    = out_stall_r;
-                    out_mem_addr_w = out_mem_addr_r;
-                    out_mem_cen_w  = out_mem_cen_r;
-                    out_mem_wen_w  = out_mem_wen_r; 
 
-                end
-            end
-            else begin
-            end
-        end
-        else if(i_proc_cen && i_proc_wen) begin
-        end
-        else begin
-        end
-    end
-    integer i;
     always@(negedge i_clk or negedge i_rst_n) begin
         if(!i_rst_n) begin
             for (i=0; i<SRAM_SIZE; i=i+1) begin
                 sram_r[i]  <= 0;
             end
-            out_data_r <= 0;
+            out_data_r      <= 0;
+            out_mem_addr_r  <= 0;
+            out_mem_wdata_r <= 0;
+            out_stall_r     <= 0;
+            out_mem_cen_r   <= 0;
+            out_mem_wen_r   <= 0;
+            state_r         <= S_IDLE;
         end
         else begin
             for (i=0; i<SRAM_SIZE; i=i+1) begin
                 sram_r[i]  <= sram_w[i];
             end
-            out_data_r <= out_data_w;
+            out_data_r      <= out_data_w;
+            out_mem_addr_r  <= out_mem_addr_w;
+            out_mem_wdata_r <= out_mem_wdata_w;
+            out_stall_r     <= out_stall_w;
+            out_mem_cen_r   <= out_mem_cen_w;
+            out_mem_wen_r   <= out_mem_wen_w;
+            state_r         <= state_w;
         end
     end
-endmodule*/
+endmodule
 
+
+*/
 module Cache#(
         parameter BIT_W = 32,
         parameter ADDR_W = 32

@@ -11,9 +11,13 @@ def sort(v, n):
 
 if __name__ == '__main__':
     # Modify your test pattern here
-    n = 16
-    v = [9, 7, 3, 1, 5, 8, 0, 32, 34, 56, 23, 11, 52, 65, 69, 43]
+    n = 25
+    v = [9, 7, 3, 1, 5, 8, 0, 32, 34, 56, 23, 11, 52, 65, 69, 43, 1212, 2342, 4523, 4351, 6455, 392, 235, 7456, 14345]
     # print(v)
+    v = []
+    n = 100
+    for i in range(100):
+        v.append(100-i)
 
     with open('../00_TB/Pattern/I3/mem_D.dat', 'w') as f_data:
         f_data.write(f"{n:08x}\n")
